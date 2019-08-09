@@ -6,6 +6,7 @@ const request = require('request');
 const turndown = require('turndown');
 const xml2js = require('xml2js');
 
+
 // global so various functions can access arguments
 let argv;
 
@@ -53,7 +54,7 @@ function parseFileContent(content) {
 	xml2js.parseString(content, processors, (err, data) => {
 		if (err) {
 			console.log('Unable to parse file content.');
-			console.log(err);        
+			console.log(err);
 		} else {
 			processData(data);
 		}
@@ -63,8 +64,11 @@ function parseFileContent(content) {
 function processData(data) {
 	let images = collectImages(data);
 	let posts = collectPosts(data);
+	let pages = collectPages(data);
 	mergeImagesIntoPosts(images, posts);
-	writeFiles(posts);
+    mergeImagesIntoPosts(images, pages);
+	writeFiles(posts, "posts");
+    writeFiles(pages, "pages");
 }
 
 function collectImages(data) {
@@ -112,7 +116,7 @@ function addContentImages(data, images) {
 				console.log('Scraped ' + url + '.');
 			}
 		}
-	});	
+	});
 }
 
 function collectPosts(data) {
@@ -135,6 +139,25 @@ function collectPosts(data) {
 		}));
 }
 
+function collectPages(data) {
+    // this is passed into getPostContent() for the markdown conversion
+    turndownService = initTurndownService();
+
+    return getItemsOfType(data, 'page').map(post => ({
+        // meta data isn't written to file, but is used to help with other things
+        meta: {
+            id: getPostId(post),
+            slug: getPostSlug(post),
+            coverImageId: getPostCoverImageId(post)
+        },
+        frontmatter: {
+            title: getPostTitle(post),
+            date: getPostDate(post)
+        },
+        content: getPostContent(post, turndownService)
+    }));
+}
+
 function initTurndownService() {
 	let turndownService = new turndown({
 		headingStyle: 'atx',
@@ -155,13 +178,13 @@ function initTurndownService() {
 			// but this series of checks should find the commonalities
 			return (
 				['P', 'DIV'].includes(node.nodeName) &&
-				node.attributes['data-slug-hash'] && 
+				node.attributes['data-slug-hash'] &&
 				node.getAttribute('class') === 'codepen'
 			);
 		},
 		replacement: (content, node) => '\n\n' + node.outerHTML
 	});
-		
+
 	// preserve embedded scripts (for tweets, codepens, gists, etc.)
 	turndownService.addRule('script', {
 		filter: 'script',
@@ -270,10 +293,10 @@ function mergeImagesIntoPosts(images, posts) {
 	});
 }
 
-function writeFiles(posts) {
+function writeFiles(posts, prefix) {
 	let delay = 0;
 	posts.forEach(post => {
-		const postDir = getPostDir(post);
+		const postDir = getPostDir(post, prefix);
 		createDir(postDir);
 		writeMarkdownFile(post, postDir);
 
@@ -294,7 +317,7 @@ function writeMarkdownFile(post, postDir) {
 			return accumulator + pair[0] + ': "' + pair[1] + '"\n'
 		}, '');
 	const data = '---\n' + frontmatter + '---\n\n' + post.content + '\n';
-	
+
 	const postPath = path.join(postDir, getPostFilename(post));
 	fs.writeFile(postPath, data, (err) => {
 		if (err) {
@@ -342,14 +365,14 @@ function createDir(dir) {
 	}
 }
 
-function getPostDir(post) {
+function getPostDir(post, prefix) {
 	let dir = argv.output;
 	let dt = luxon.DateTime.fromISO(post.frontmatter.date);
 
 	if (argv.yearmonthfolders) {
-		dir = path.join(dir, dt.toFormat('yyyy'), dt.toFormat('LL'));
+		dir = path.join(dir, prefix, dt.toFormat('yyyy'), dt.toFormat('LL'));
 	} else if (argv.yearfolders) {
-		dir = path.join(dir, dt.toFormat('yyyy'));
+		dir = path.join(dir, prefix, dt.toFormat('yyyy'));
 	}
 
 	if (argv.postfolders) {
@@ -357,7 +380,7 @@ function getPostDir(post) {
 		if (argv.prefixdate) {
 			folder = dt.toFormat('yyyy-LL-dd') + '-' + folder;
 		}
-		dir = path.join(dir, folder);
+		dir = path.join(dir, prefix, folder);
 	}
 
 	return dir;
